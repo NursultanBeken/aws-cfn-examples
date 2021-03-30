@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  OperatorEmail:
+    Type: String
+    
+  BucketNameParameter:
+    Type: String
+    Description: S3 Bucket Name  
+    
+Resources:
+  # bucket that we will monitor
+  S3BucketTrail:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketNameParameter
+    DeletionPolicy: Delete
+# ---- create SNS topic --------
+  Topic: 
+    Type: AWS::SNS::Topic
+    Properties: 
+      Subscription: 
+        - Endpoint: !Ref OperatorEmail
+          Protocol: email
+  TopicPolicy: 
+    Type: AWS::SNS::TopicPolicy
+    Properties: 
+      Topics: 
+        - Ref: "Topic"
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Sid: "AWSCloudTrailSNSPolicy"
+            Effect: "Allow"
+            Principal: 
+              Service: "cloudtrail.amazonaws.com"
+            Resource: "*"
+            Action: "SNS:Publish"
+          - 
+            Sid: "AllowCloudWatchEvents"
+            Effect: "Allow"
+            Principal: 
+              Service: "events.amazonaws.com"
+            Resource: "*"
+            Action: "SNS:Publish"
+# ---- create Log group --------            
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "${AWS::StackName}-log"
+      RetentionInDays: 60
+# ---- create CloudTrail and IAM role for cloudTrail --------  
+  # bucket where we will store cloudtrail logs    
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-bucket"
+  BucketPolicy: 
+    Type: AWS::S3::BucketPolicy
+    Properties: 
+      Bucket: !Ref S3Bucket
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: "cloudtrail.amazonaws.com"
+            Action: 
+              - "s3:GetBucketAcl"
+            Resource: 
+              - !Sub "arn:aws:s3:::${S3Bucket}"
+          - Effect: "Allow"
+            Principal: 
+              Service: "cloudtrail.amazonaws.com"
+            Action: 
+              - "s3:PutObject"
+            Resource:
+              - !Sub "arn:aws:s3:::${S3Bucket}/AWSLogs/${AWS::AccountId}/*"    
+  CloudTrailRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-cloudtrail-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudtrail.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'        
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-cloudtrail-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - logs:CreateLogStream
+                Resource: 
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroup}:log-stream:*" 
+              - Effect: Allow
+                Action: 
+                  - logs:PutLogEvents
+                Resource: 
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroup}:log-stream:*" 
+  CloudTrail:
+    DependsOn: 
+      - BucketPolicy
+    Type: AWS::CloudTrail::Trail
+    Properties: 
+      CloudWatchLogsLogGroupArn: !GetAtt [LogGroup, Arn]
+      CloudWatchLogsRoleArn: !GetAtt [CloudTrailRole, Arn]
+      IsLogging: true
+      S3BucketName: !Ref S3Bucket
+      EventSelectors:
+        - DataResources:
+            - Type: AWS::S3::Object
+              Values: 
+                - !Sub "arn:aws:s3:::${S3BucketTrail}/"
+          IncludeManagementEvents: false
+          ReadWriteType: All     
+# ---- create CloudWatch event rule ----                                
+  AmazonCloudWatchEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      State: ENABLED
+      Targets:
+        - Arn: !Ref Topic
+          Id: "TargetSNStopic1"
+      EventPattern:
+        source: 
+          - aws.s3
+        detail-type:
+          - "AWS API Call via CloudTrail"
+        detail:
+          eventSource:
+            - s3.amazonaws.com
+          eventName:
+            - PutObject
+          requestParameters:
+            bucketName:
+              - !Ref BucketNameParameter          
