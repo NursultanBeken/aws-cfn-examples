@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  This template creates EC2 and AWS Inspector setup
+Parameters:  
+  InstanceType:
+    Description: instance type
+    Type: String
+    Default: t2.micro
+  AmiId:
+    Description: EC2 AMI ID for Ubuntu machine
+    Type: AWS::EC2::Image::Id
+    Default: ami-077e31c4939f6a2f3
+  KeyPairName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair
+Resources:
+  SSMcoreAccessRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  SSMInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: 
+        - !Ref SSMcoreAccessRole
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow port 22 from anywhere
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          FromPort: 8
+          ToPort: -1
+          CidrIp: 0.0.0.0/0          
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      ImageId: !Ref AmiId
+      IamInstanceProfile: !Ref SSMInstanceProfile
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup     
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${AWS::Region}-inspector
+        - Key: Inspector 
+          Value: "true"
+
+  InspectorResourcegroup: 
+    Type: "AWS::Inspector::ResourceGroup"
+    DependsOn: EC2Instance
+    Properties: 
+      ResourceGroupTags: 
+        - Key: "Inspector"
+          Value: "true"
+  AssessmentTarget:
+    Type: "AWS::Inspector::AssessmentTarget"
+    Properties:
+      AssessmentTargetName: "Amazon Inspector Targets"
+      ResourceGroupArn: !Ref InspectorResourcegroup
+  AssessmentTemplate:
+    Type: "AWS::Inspector::AssessmentTemplate"
+    Properties:
+      AssessmentTargetArn: !Ref AssessmentTarget
+      AssessmentTemplateName: !Sub ${AWS::StackName}-${AWS::Region}-AssessmentTemplate
+      DurationInSeconds: 3600
+      RulesPackageArns: [
+        "arn:aws:inspector:us-east-2:646659390643:rulespackage/0-JnA8Zp85",
+        "arn:aws:inspector:us-east-2:646659390643:rulespackage/0-m8r61nnh",
+        "arn:aws:inspector:us-east-2:646659390643:rulespackage/0-cE4kTR30",
+        "arn:aws:inspector:us-east-2:646659390643:rulespackage/0-AxKmMHPX"
+      ]
